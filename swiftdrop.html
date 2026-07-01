@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SwiftDrop - P2P File Transfer</title>
+  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --bg: #0a0a0b;
+      --card: #141416;
+      --border: #27272a;
+      --text: #fff;
+      --text-dim: #a1a1aa;
+      --accent: #6366f1;
+      --accent-hover: #818cf8;
+      --success: #22c55e;
+      --error: #ef4444;
+    }
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      padding: 1rem 2rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      font-weight: 700;
+      font-size: 1.25rem;
+    }
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 1rem;
+      background: var(--card);
+      border-radius: 9999px;
+      font-size: 0.875rem;
+    }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--error); }
+    .dot.online { background: var(--success); animation: pulse 2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+    .tabs {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 2rem;
+      background: var(--card);
+      padding: 0.25rem;
+      border-radius: 12px;
+    }
+    .tab {
+      padding: 0.75rem 1.5rem;
+      border: none;
+      background: transparent;
+      color: var(--text-dim);
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+      border-radius: 8px;
+      transition: all 0.2s;
+    }
+    .tab.active { background: var(--accent); color: white; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 2rem;
+      width: 100%;
+      max-width: 440px;
+      text-align: center;
+    }
+    .card h2 { font-size: 1.5rem; margin-bottom: 0.5rem; }
+    .card > p { color: var(--text-dim); font-size: 0.875rem; margin-bottom: 1.5rem; }
+    .qr-box { background: white; padding: 1rem; border-radius: 12px; display: inline-block; margin-bottom: 1rem; }
+    .qr-box canvas { display: block; }
+    .code-box {
+      display: flex;
+      gap: 0.5rem;
+      justify-content: center;
+      margin-bottom: 1rem;
+    }
+    .digit {
+      width: 44px;
+      height: 52px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.5rem;
+      font-weight: 600;
+      font-family: monospace;
+    }
+    .peer-id {
+      font-family: monospace;
+      background: var(--bg);
+      padding: 0.5rem 1rem;
+      border-radius: 8px;
+      font-size: 0.8rem;
+      color: var(--text-dim);
+      word-break: break-all;
+      margin-bottom: 1rem;
+    }
+    .btn {
+      padding: 0.75rem 1.5rem;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+    }
+    .btn-primary { background: var(--accent); color: white; }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-secondary { background: var(--bg); color: var(--text); border: 1px solid var(--border); }
+    .btn-secondary:hover { background: var(--border); }
+    .input-group { margin-bottom: 1rem; }
+    .input-group label { display: block; font-size: 0.875rem; color: var(--text-dim); margin-bottom: 0.5rem; }
+    .input-group input {
+      width: 100%;
+      padding: 0.75rem 1rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 1.25rem;
+      font-family: monospace;
+      letter-spacing: 0.5rem;
+      text-align: center;
+    }
+    .input-group input:focus { outline: none; border-color: var(--accent); }
+    .drop-zone {
+      border: 2px dashed var(--border);
+      border-radius: 12px;
+      padding: 2rem;
+      cursor: pointer;
+      transition: all 0.2s;
+      margin: 1rem 0;
+    }
+    .drop-zone:hover, .drop-zone.dragover { border-color: var(--accent); background: rgba(99,102,241,0.1); }
+    .drop-zone svg { width: 48px; height: 48px; margin-bottom: 0.5rem; color: var(--text-dim); }
+    .drop-zone p { color: var(--text-dim); font-size: 0.875rem; }
+    .files { margin: 1rem 0; max-height: 200px; overflow-y: auto; }
+    .file {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 0.75rem;
+      background: var(--bg);
+      border-radius: 8px;
+      margin-bottom: 0.5rem;
+      text-align: left;
+    }
+    .file-icon { width: 36px; height: 36px; background: var(--accent); border-radius: 6px; display: flex; align-items: center; justify-content: center; }
+    .file-info { flex: 1; min-width: 0; }
+    .file-name { font-size: 0.875rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .file-size { font-size: 0.75rem; color: var(--text-dim); }
+    .progress { height: 4px; background: var(--border); border-radius: 2px; margin-top: 0.5rem; }
+    .progress-bar { height: 100%; background: var(--accent); border-radius: 2px; transition: width 0.3s; }
+    .status-msg { font-size: 0.75rem; color: var(--success); margin-top: 0.25rem; }
+    .connected-banner {
+      background: rgba(34, 197, 94, 0.1);
+      border: 1px solid var(--success);
+      padding: 1rem;
+      border-radius: 12px;
+      margin-bottom: 1rem;
+    }
+    .connected-banner h3 { color: var(--success); font-size: 1rem; margin-bottom: 0.25rem; }
+    .connected-banner p { color: var(--text-dim); font-size: 0.875rem; }
+    .error { background: rgba(239,68,68,0.1); border: 1px solid var(--error); color: var(--error); padding: 0.75rem; border-radius: 8px; font-size: 0.875rem; margin-bottom: 1rem; }
+    .hidden { display: none !important; }
+    footer { text-align: center; padding: 1rem; color: var(--text-dim); font-size: 0.75rem; border-top: 1px solid var(--border); }
+    @media (max-width: 480px) {
+      .card { padding: 1.5rem; }
+      .digit { width: 38px; height: 46px; font-size: 1.25rem; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo">
+      <svg viewBox="0 0 32 32" fill="none" width="32" height="32">
+        <rect width="32" height="32" rx="8" fill="#6366f1"/>
+        <path d="M8 16L14 10L20 16L14 22L8 16Z" fill="white" opacity="0.9"/>
+        <path d="M14 16L20 10L26 16L20 22L14 16Z" fill="white"/>
+      </svg>
+      SwiftDrop
+    </div>
+    <div class="status">
+      <div class="dot" id="statusDot"></div>
+      <span id="statusText">Connecting...</span>
+    </div>
+  </header>
+
+  <main>
+    <div class="tabs">
+      <button class="tab active" data-mode="send">Send Files</button>
+      <button class="tab" data-mode="receive">Receive Files</button>
+    </div>
+
+    <!-- SEND MODE -->
+    <div class="card" id="sendCard">
+      <h2>Send Files</h2>
+      <p>Share with another device</p>
+      
+      <div id="sendSetup">
+        <div class="qr-box">
+          <div id="qrcode"></div>
+        </div>
+        <p style="color: var(--text-dim); font-size: 0.875rem;">Share code or scan QR</p>
+        <div class="code-box" id="codeDisplay"></div>
+        <div class="peer-id" id="sendPeerId">Generating...</div>
+        <button class="btn btn-secondary" onclick="copyCode()">Copy Code</button>
+      </div>
+
+      <div id="sendConnected" class="hidden">
+        <div class="connected-banner">
+          <h3>✓ Connected</h3>
+          <p>Ready to send files</p>
+        </div>
+        <div class="drop-zone" id="sendDropZone">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          <p>Drop files here or click</p>
+          <input type="file" id="sendFileInput" multiple hidden>
+        </div>
+        <div class="files" id="sendFiles"></div>
+        <button class="btn btn-secondary" onclick="disconnectSend()">Disconnect</button>
+      </div>
+    </div>
+
+    <!-- RECEIVE MODE -->
+    <div class="card hidden" id="receiveCard">
+      <h2>Receive Files</h2>
+      <p>Enter sender's code</p>
+      
+      <div id="receiveSetup">
+        <div class="input-group">
+          <label>6-digit code</label>
+          <input type="text" id="receiveCode" maxlength="6" placeholder="------" autocomplete="off">
+        </div>
+        <div id="receiveError" class="error hidden"></div>
+        <button class="btn btn-primary" onclick="connectToSender()" style="width:100%">Connect</button>
+      </div>
+
+      <div id="receiveConnected" class="hidden">
+        <div class="connected-banner">
+          <h3>✓ Connected</h3>
+          <p>Receiving files...</p>
+        </div>
+        <div class="drop-zone">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          <p>Incoming files</p>
+        </div>
+        <div class="files" id="receiveFiles"></div>
+        <button class="btn btn-secondary" onclick="disconnectReceive()">Disconnect</button>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    SwiftDrop &copy; 2024 &bull; P2P File Transfer &bull; 100% Private
+  </footer>
+
+  <script>
+    // PeerJS Configuration
+    let peer = null;
+    let conn = null;
+    let myCode = '';
+    let mode = 'send';
+    let receiving = {};
+
+    // Initialize on load
+    document.addEventListener('DOMContentLoaded', init);
+
+    function init() {
+      setupTabs();
+      setupDropZone();
+      setupFileInput();
+      setupReceiveInput();
+      initPeer();
+      checkUrlParams();
+    }
+
+    function setupTabs() {
+      document.querySelectorAll('.tab').forEach(tab => {
+        tab.onclick = () => {
+          document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+          tab.classList.add('active');
+          mode = tab.dataset.mode;
+          document.getElementById('sendCard').classList.toggle('hidden', mode !== 'send');
+          document.getElementById('receiveCard').classList.toggle('hidden', mode !== 'receive');
+        };
+      });
+    }
+
+    function setupDropZone() {
+      const zone = document.getElementById('sendDropZone');
+      if (!zone) return;
+      
+      zone.onclick = () => conn && conn.open && document.getElementById('sendFileInput').click();
+      
+      zone.ondragover = e => { e.preventDefault(); zone.classList.add('dragover'); };
+      zone.ondragleave = () => zone.classList.remove('dragover');
+      zone.ondrop = e => {
+        e.preventDefault();
+        zone.classList.remove('dragover');
+        if (conn && conn.open) handleFiles(e.dataTransfer.files);
+      };
+    }
+
+    function setupFileInput() {
+      const input = document.getElementById('sendFileInput');
+      if (input) input.onchange = e => handleFiles(e.target.files);
+    }
+
+    function setupReceiveInput() {
+      const input = document.getElementById('receiveCode');
+      if (input) input.oninput = e => {
+        e.target.value = e.target.value.replace(/[^0-9]/g, '').slice(0, 6);
+      };
+    }
+
+    function initPeer() {
+      setStatus('Connecting...', false);
+      peer = new Peer({
+        debug: 0,
+        config: {
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' }
+          ]
+        }
+      });
+
+      peer.on('open', id => {
+        myCode = id.slice(-6).toUpperCase();
+        document.getElementById('sendPeerId').textContent = 'ID: ' + id;
+        updateCodeDisplay(myCode);
+        generateQR(id);
+        setStatus('Online', true);
+      });
+
+      peer.on('connection', c => {
+        conn = c;
+        setupConnection();
+      });
+
+      peer.on('error', err => {
+        console.error('Peer error:', err);
+        if (err.type === 'network' || err.type === 'server-error') {
+          setStatus('Reconnecting...', false);
+          setTimeout(initPeer, 3000);
+        }
+      });
+
+      peer.on('disconnected', () => {
+        setStatus('Reconnecting...', false);
+        peer.reconnect();
+      });
+    }
+
+    function generateQR(id) {
+      const div = document.getElementById('qrcode');
+      div.innerHTML = '';
+      const url = window.location.origin + window.location.pathname + '?join=' + id;
+      
+      QRCode.toCanvas(url, { width: 160, margin: 0 }, (err, canvas) => {
+        if (err) {
+          // Fallback
+          const c = document.createElement('canvas');
+          c.width = 160; c.height = 160;
+          const ctx = c.getContext('2d');
+          ctx.fillStyle = '#fff';
+          ctx.fillRect(0, 0, 160, 160);
+          ctx.fillStyle = '#6366f1';
+          ctx.font = '14px Inter';
+          ctx.textAlign = 'center';
+          ctx.fillText('Scan to connect', 80, 70);
+          ctx.fillText('Code: ' + myCode, 80, 90);
+          div.appendChild(c);
+          return;
+        }
+        div.appendChild(canvas);
+      });
+    }
+
+    function updateCodeDisplay(code) {
+      const box = document.getElementById('codeDisplay');
+      box.innerHTML = '';
+      for (let i = 0; i < 6; i++) {
+        const d = document.createElement('div');
+        d.className = 'digit';
+        d.textContent = code[i] || '-';
+        box.appendChild(d);
+      }
+    }
+
+    function copyCode() {
+      navigator.clipboard.writeText(myCode);
+      const btn = document.querySelector('[onclick="copyCode()"]');
+      btn.textContent = 'Copied!';
+      setTimeout(() => btn.textContent = 'Copy Code', 2000);
+    }
+
+    function connectToSender() {
+      const code = document.getElementById('receiveCode').value;
+      if (code.length !== 6) {
+        showError('Enter 6-digit code');
+        return;
+      }
+      hideError();
+      setStatus('Connecting...', false);
+      conn = peer.connect(code, { reliable: true });
+      setupConnection();
+      
+      setTimeout(() => {
+        if (!conn || !conn.open) {
+          showError('Connection failed');
+          setStatus('Online', true);
+        }
+      }, 10000);
+    }
+
+    function setupConnection() {
+      conn.on('open', () => {
+        setStatus('Connected', true);
+        if (mode === 'send') {
+          document.getElementById('sendSetup').classList.add('hidden');
+          document.getElementById('sendConnected').classList.remove('hidden');
+        } else {
+          document.getElementById('receiveSetup').classList.add('hidden');
+          document.getElementById('receiveConnected').classList.remove('hidden');
+        }
+      });
+
+      conn.on('data', data => {
+        handleData(data);
+      });
+
+      conn.on('close', handleDisconnect);
+    }
+
+    function handleData(data) {
+      if (data.type === 'start') {
+        receiving[data.id] = { name: data.name, size: data.size, chunks: [] };
+        addFileUI(data.id, data.name, data.size, 'receive');
+      } else if (data.type === 'chunk') {
+        if (receiving[data.id]) {
+          receiving[data.id].chunks.push(data.data);
+          updateProgress(data.id, data.progress);
+        }
+      } else if (data.type === 'end') {
+        if (receiving[data.id]) {
+          const blob = dataURLtoBlob(receiving[data.id].chunks.join(''));
+          downloadFile(blob, receiving[data.id].name);
+          setComplete(data.id);
+          delete receiving[data.id];
+        }
+      }
+    }
+
+    function handleFiles(files) {
+      Array.from(files).forEach(file => {
+        const id = Date.now() + Math.random();
+        const reader = new FileReader();
+        reader.onload = e => {
+          addFileUI(id, file.name, file.size, 'send');
+          sendFile(id, file.name, e.target.result);
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function sendFile(id, name, data) {
+      const chunkSize = 64 * 1024;
+      let offset = 0;
+
+      conn.send({ type: 'start', id, name, size: data.length });
+
+      function sendChunk() {
+        if (offset >= data.length) {
+          conn.send({ type: 'end', id });
+          setComplete(id);
+          return;
+        }
+        const chunk = data.slice(offset, offset + chunkSize);
+        conn.send({
+          type: 'chunk',
+          id,
+          data: chunk,
+          progress: Math.round((offset / data.length) * 100)
+        });
+        updateProgress(id, Math.round((offset / data.length) * 100));
+        offset += chunkSize;
+        setTimeout(sendChunk, 0);
+      }
+      sendChunk();
+    }
+
+    function addFileUI(id, name, size, type) {
+      const list = document.getElementById(type === 'send' ? 'sendFiles' : 'receiveFiles');
+      const div = document.createElement('div');
+      div.className = 'file';
+      div.id = 'file-' + id;
+      div.innerHTML = `
+        <div class="file-icon">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2">
+            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+          </svg>
+        </div>
+        <div class="file-info">
+          <div class="file-name">${name}</div>
+          <div class="file-size">${formatSize(size)}</div>
+          <div class="progress"><div class="progress-bar" style="width:0%"></div></div>
+          <div class="status-msg"></div>
+        </div>
+      `;
+      list.appendChild(div);
+    }
+
+    function updateProgress(id, pct) {
+      const el = document.getElementById('file-' + id);
+      if (el) el.querySelector('.progress-bar').style.width = pct + '%';
+    }
+
+    function setComplete(id) {
+      const el = document.getElementById('file-' + id);
+      if (el) el.querySelector('.status-msg').textContent = '✓ Done';
+    }
+
+    function dataURLtoBlob(dataurl) {
+      const arr = dataurl.split(',');
+      const mime = arr[0].match(/:(.*?);/)[1];
+      const bstr = atob(arr[1]);
+      const u8 = new Uint8Array(bstr.length);
+      for (let i = 0; i < bstr.length; i++) u8[i] = bstr.charCodeAt(i);
+      return new Blob([u8], { type: mime });
+    }
+
+    function downloadFile(blob, name) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function formatSize(bytes) {
+      if (!bytes) return '0 B';
+      const k = 1024;
+      const s = ['B', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + s[i];
+    }
+
+    function handleDisconnect() {
+      conn = null;
+      receiving = {};
+      document.getElementById('sendFiles').innerHTML = '';
+      document.getElementById('receiveFiles').innerHTML = '';
+      document.getElementById('sendSetup').classList.remove('hidden');
+      document.getElementById('sendConnected').classList.add('hidden');
+      document.getElementById('receiveSetup').classList.remove('hidden');
+      document.getElementById('receiveConnected').classList.add('hidden');
+      document.getElementById('receiveCode').value = '';
+      setStatus('Online', true);
+    }
+
+    function disconnectSend() {
+      if (conn) conn.close();
+      handleDisconnect();
+    }
+
+    function disconnectReceive() {
+      if (conn) conn.close();
+      handleDisconnect();
+    }
+
+    function setStatus(text, online) {
+      document.getElementById('statusDot').classList.toggle('online', online);
+      document.getElementById('statusText').textContent = text;
+    }
+
+    function showError(msg) {
+      const el = document.getElementById('receiveError');
+      el.textContent = msg;
+      el.classList.remove('hidden');
+    }
+
+    function hideError() {
+      document.getElementById('receiveError').classList.add('hidden');
+    }
+
+    function checkUrlParams() {
+      const params = new URLSearchParams(location.search);
+      const join = params.get('join');
+      if (join) {
+        setTimeout(() => {
+          document.querySelector('[data-mode="receive"]').click();
+          document.getElementById('receiveCode').value = join;
+          connectToSender();
+        }, 1500);
+      }
+    }
+  </script>
+</body>
+</html>
