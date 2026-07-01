@@ -266,8 +266,8 @@
       
       <div id="receiveSetup">
         <div class="input-group">
-          <label>Enter peer ID</label>
-          <input type="text" id="receiveCode" placeholder="Paste peer ID here" autocomplete="off">
+          <label>Enter 6-digit code</label>
+          <input type="text" id="receiveCode" maxlength="6" placeholder="ABC123" autocomplete="off" style="text-transform:uppercase;letter-spacing:0.5rem;font-size:1.5rem;text-align:center;font-family:monospace;">
         </div>
         <div id="receiveError" class="error hidden"></div>
         <button class="btn btn-primary" onclick="connectToSender()" style="width:100%">Connect</button>
@@ -355,13 +355,25 @@
       };
     }
 
+    function generateShortCode() {
+      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+      let code = '';
+      for (let i = 0; i < 6; i++) {
+        code += chars[Math.floor(Math.random() * chars.length)];
+      }
+      return code;
+    }
+    
     function initPeer() {
       setStatus('Connecting...', false);
-      peer = new Peer({
+      const shortCode = generateShortCode();
+      myCode = shortCode;
+      
+      peer = new Peer(shortCode, {
         host: '0.peerjs.com',
         port: 443,
         secure: true,
-        debug: 2,
+        debug: 0,
         config: {
           iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
@@ -376,7 +388,6 @@
       });
 
       peer.on('open', id => {
-        myCode = id;
         document.getElementById('sendPeerId').textContent = 'ID: ' + id;
         updateCodeDisplay(id);
         generateQR(id);
@@ -430,13 +441,24 @@
     function updateCodeDisplay(code) {
       const box = document.getElementById('codeDisplay');
       box.innerHTML = '';
-      const d = document.createElement('div');
-      d.className = 'digit';
-      d.style.width = 'auto';
-      d.style.padding = '0 1rem';
-      d.style.fontSize = '1rem';
-      d.textContent = code;
-      box.appendChild(d);
+      box.style.display = 'flex';
+      box.style.gap = '4px';
+      for (let i = 0; i < 6; i++) {
+        const d = document.createElement('div');
+        d.className = 'digit';
+        d.style.width = '2.5rem';
+        d.style.height = '3rem';
+        d.style.display = 'flex';
+        d.style.alignItems = 'center';
+        d.style.justifyContent = 'center';
+        d.style.fontSize = '1.5rem';
+        d.style.fontWeight = 'bold';
+        d.style.background = 'var(--bg)';
+        d.style.border = '2px solid var(--border)';
+        d.style.borderRadius = '8px';
+        d.textContent = code[i] || '';
+        box.appendChild(d);
+      }
     }
 
     function copyCode() {
@@ -447,9 +469,9 @@
     }
 
     function connectToSender() {
-      const code = document.getElementById('receiveCode').value.trim();
-      if (!code) {
-        showError('Enter the peer ID');
+      const code = document.getElementById('receiveCode').value.trim().toUpperCase();
+      if (code.length !== 6) {
+        showError('Enter 6-character code');
         return;
       }
       hideError();
