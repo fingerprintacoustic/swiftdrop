@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SwiftDrop - P2P File Transfer</title>
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/qrious@4.0.2/dist/qrious.min.js"></script>
+  <script src="https://unpkg.com/qrious@4.0.2/dist/qrious.min.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -422,13 +422,19 @@
       const div = document.getElementById('qrcode');
       div.innerHTML = '';
       const url = window.location.origin + window.location.pathname + '?join=' + id;
+      console.log('Generating QR for:', url);
       
       try {
+        if (typeof QRious === 'undefined') {
+          console.log('QRious not loaded, using fallback');
+          div.innerHTML = '<p style="color:var(--text-dim);font-size:11px">Scan to connect</p><p style="font-family:monospace;font-size:10px">' + id + '</p>';
+          return;
+        }
         const qr = new QRious({
           value: url,
           size: 160,
           level: 'M',
-          background: '#1e1e2e',
+          background: 'transparent',
           foreground: '#ffffff'
         });
         const img = document.createElement('img');
@@ -437,7 +443,7 @@
         img.style.height = '160px';
         div.appendChild(img);
       } catch(e) {
-        // Fallback - just text
+        console.log('QR error:', e);
         div.innerHTML = '<p style="color:var(--text-dim);font-size:12px">Code: ' + myCode + '</p>';
       }
     }
