@@ -303,6 +303,7 @@
     let myCode = '';
     let mode = 'send';
     let receiving = {};
+    let isDisconnecting = false;
 
     // Initialize on load
     document.addEventListener('DOMContentLoaded', init);
@@ -395,21 +396,28 @@
       });
 
       peer.on('connection', c => {
+        if (isDisconnecting) return;
         conn = c;
         setupConnection();
       });
 
       peer.on('error', err => {
         console.error('Peer error:', err);
-        if (err.type === 'network' || err.type === 'server-error') {
+        if (err.type === 'peer-unavailable') {
+          showError('Peer not found');
+          setStatus('Online', true);
+        } else if (err.type === 'network' || err.type === 'server-error') {
           setStatus('Reconnecting...', false);
           setTimeout(initPeer, 3000);
+        } else {
+          setStatus('Error: ' + err.type, false);
         }
       });
 
       peer.on('disconnected', () => {
-        setStatus('Reconnecting...', false);
-        peer.reconnect();
+        if (!peer.destroyed) {
+          peer.reconnect();
+        }
       });
     }
 
@@ -541,9 +549,15 @@
       const chunkSize = 64 * 1024;
       let offset = 0;
 
+      if (!conn || !conn.open) {
+        console.error('Connection not ready');
+        return;
+      }
+
       conn.send({ type: 'start', id, name, size: data.length });
 
       function sendChunk() {
+        if (!conn || !conn.open) return;
         if (offset >= data.length) {
           conn.send({ type: 'end', id });
           setComplete(id);
@@ -605,12 +619,20 @@
     }
 
     function downloadFile(blob, name) {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = name;
-      a.click();
-      URL.revokeObjectURL(url);
+      try {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = name;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 100);
+      } catch (e) {
+        console.error('Download failed:', e);
+        alert('Download failed: ' + e.message);
+      }
     }
 
     function formatSize(bytes) {
@@ -622,6 +644,7 @@
     }
 
     function handleDisconnect() {
+      isDisconnecting = true;
       conn = null;
       receiving = {};
       document.getElementById('sendFiles').innerHTML = '';
@@ -632,6 +655,7 @@
       document.getElementById('receiveConnected').classList.add('hidden');
       document.getElementById('receiveCode').value = '';
       setStatus('Online', true);
+      setTimeout(() => isDisconnecting = false, 500);
     }
 
     function disconnectSend() {
@@ -645,8 +669,12 @@
     }
 
     function setStatus(text, online) {
-      document.getElementById('statusDot').classList.toggle('online', online);
-      document.getElementById('statusText').textContent = text;
+      const dot = document.getElementById('statusDot');
+      const txt = document.getElementById('statusText');
+      if (dot && txt) {
+        dot.classList.toggle('online', online);
+        txt.textContent = text;
+      }
     }
 
     function showError(msg) {
