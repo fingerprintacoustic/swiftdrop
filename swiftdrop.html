@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SwiftDrop - P2P File Transfer</title>
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/davidshimjs-qrcodejs@0.0.2/qrcode.min.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -418,23 +417,39 @@
       });
     }
 
+    // Simple QR code generator (minimal implementation)
     function generateQR(id) {
       const div = document.getElementById('qrcode');
       div.innerHTML = '';
       const url = window.location.origin + window.location.pathname + '?join=' + id;
       
-      try {
-        new QRCode(div, {
-          text: url,
-          width: 160,
-          height: 160,
-          colorDark: '#ffffff',
-          colorLight: '#1e1e2e',
-          correctLevel: QRCode.CorrectLevel.M
-        });
-      } catch(e) {
-        div.innerHTML = '<p style="color:var(--text-dim);font-size:12px">Code: ' + myCode + '</p>';
-      }
+      // Create canvas
+      const canvas = document.createElement('canvas');
+      const size = 160;
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d');
+      
+      // Use Google Charts API to generate QR
+      const qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=' + size + 'x' + size + '&data=' + encodeURIComponent(url) + '&bgcolor=1e1e2e&color=ffffff';
+      
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = function() {
+        ctx.drawImage(img, 0, 0, size, size);
+      };
+      img.onerror = function() {
+        // Fallback text
+        ctx.fillStyle = '#1e1e2e';
+        ctx.fillRect(0, 0, size, size);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '14px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('Scan to', size/2, size/2 - 10);
+        ctx.fillText('Connect', size/2, size/2 + 10);
+      };
+      img.src = qrUrl;
+      div.appendChild(canvas);
     }
 
     function updateCodeDisplay(code) {
