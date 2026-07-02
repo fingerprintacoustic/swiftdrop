@@ -422,8 +422,15 @@
       const div = document.getElementById('qrcode');
       div.innerHTML = '';
       const url = window.location.origin + window.location.pathname + '?join=' + encodeURIComponent(id);
-      const qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=' + url;
-      div.innerHTML = '<img src="' + qrUrl + '" width="160" height="160" alt="QR Code" style="display:block;border-radius:8px;">';
+      const qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=' + encodeURIComponent(url);
+      const img = document.createElement('img');
+      img.src = qrUrl;
+      img.width = 160;
+      img.height = 160;
+      img.alt = 'QR Code';
+      img.style.display = 'block';
+      img.style.borderRadius = '8px';
+      div.appendChild(img);
     }
 
     function updateCodeDisplay(code) {
