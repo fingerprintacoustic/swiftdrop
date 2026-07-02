@@ -313,7 +313,7 @@
       setupDropZone();
       setupFileInput();
       setupReceiveInput();
-      initPeer();
+      initPeer(generateShortCode());
       checkUrlParams();
     }
 
@@ -365,12 +365,10 @@
       return code;
     }
     
-    function initPeer() {
+    function initPeer(customId) {
       setStatus('Connecting...', false);
-      const shortCode = generateShortCode();
-      myCode = shortCode;
       
-      peer = new Peer(shortCode, {
+      const options = {
         host: '0.peerjs.com',
         port: 443,
         secure: true,
@@ -381,19 +379,34 @@
             { urls: 'stun:stun1.l.google.com:19302' }
           ]
         }
-      });
+      };
       
-      peer.on('error', err => {
-        console.error('PeerJS Error:', err);
-        setStatus('Error: ' + err.type, false);
-      });
+      if (customId) {
+        options.path = '/'; // Required for custom IDs
+      }
+      
+      peer = new Peer(customId || undefined, options);
+      let hasOpened = false;
 
       peer.on('open', id => {
+        hasOpened = true;
+        myCode = id;
         document.getElementById('sendPeerId').textContent = 'ID: ' + id;
         updateCodeDisplay(id);
         generateQR(id);
         setStatus('Online', true);
       });
+      
+      // Fallback: if no open event in 10s with custom ID, retry without
+      if (customId) {
+        setTimeout(() => {
+          if (!hasOpened && peer && !peer.destroyed) {
+            console.log('Timeout waiting for custom ID, retrying...');
+            peer.destroy();
+            initPeer();
+          }
+        }, 10000);
+      }
 
       peer.on('connection', c => {
         if (isDisconnecting) return;
@@ -406,16 +419,20 @@
         if (err.type === 'peer-unavailable') {
           showError('Peer not found');
           setStatus('Online', true);
+        } else if (err.type === 'unavailable-id' && !hasOpened) {
+          // Custom ID taken, retry with auto-generated
+          console.log('ID taken, using auto-generated...');
+          initPeer();
         } else if (err.type === 'network' || err.type === 'server-error') {
           setStatus('Reconnecting...', false);
-          setTimeout(initPeer, 3000);
-        } else {
+          setTimeout(() => initPeer(customId), 3000);
+        } else if (!hasOpened) {
           setStatus('Error: ' + err.type, false);
         }
       });
 
       peer.on('disconnected', () => {
-        if (!peer.destroyed) {
+        if (!peer.destroyed && hasOpened) {
           peer.reconnect();
         }
       });
@@ -679,8 +696,10 @@
 
     function showError(msg) {
       const el = document.getElementById('receiveError');
-      el.textContent = msg;
-      el.classList.remove('hidden');
+      if (el) {
+        el.textContent = msg;
+        el.classList.remove('hidden');
+      }
     }
 
     function hideError() {
