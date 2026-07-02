@@ -236,8 +236,8 @@
         </div>
         <p style="color: var(--text-dim); font-size: 0.875rem;">Share code or scan QR</p>
         <div class="code-box" id="codeDisplay"></div>
-        <div class="peer-id" id="sendPeerId">Generating...</div>
-        <button class="btn btn-secondary" onclick="copyCode()">Copy Code</button>
+        <div class="peer-id" id="sendPeerId">Connecting...</div>
+        <button class="btn btn-secondary" onclick="copyCode()">Copy Full ID</button>
       </div>
 
       <div id="sendConnected" class="hidden">
@@ -266,8 +266,8 @@
       
       <div id="receiveSetup">
         <div class="input-group">
-          <label>Enter 6-digit code</label>
-          <input type="text" id="receiveCode" maxlength="6" placeholder="ABC123" autocomplete="off" style="text-transform:uppercase;letter-spacing:0.5rem;font-size:1.5rem;text-align:center;font-family:monospace;">
+          <label>Enter peer ID</label>
+          <input type="text" id="receiveCode" placeholder="Paste peer ID here" autocomplete="off">
         </div>
         <div id="receiveError" class="error hidden"></div>
         <button class="btn btn-primary" onclick="connectToSender()" style="width:100%">Connect</button>
@@ -313,7 +313,7 @@
       setupDropZone();
       setupFileInput();
       setupReceiveInput();
-      initPeer(generateShortCode());
+      initPeer();
       checkUrlParams();
     }
 
@@ -365,48 +365,32 @@
       return code;
     }
     
-    function initPeer(customId) {
+    function initPeer() {
       setStatus('Connecting...', false);
       
-      const options = {
+      peer = new Peer({
         host: '0.peerjs.com',
         port: 443,
         secure: true,
-        debug: 0,
+        debug: 1,
         config: {
           iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' }
           ]
         }
-      };
-      
-      if (customId) {
-        options.path = '/'; // Required for custom IDs
-      }
-      
-      peer = new Peer(customId || undefined, options);
-      let hasOpened = false;
+      });
 
       peer.on('open', id => {
-        hasOpened = true;
+        console.log('Peer opened with ID:', id);
         myCode = id;
-        document.getElementById('sendPeerId').textContent = 'ID: ' + id;
-        updateCodeDisplay(id);
+        // Show short code (last 6 chars) for easier reading
+        const shortCode = id.slice(-6).toUpperCase();
+        document.getElementById('sendPeerId').textContent = 'Code: ' + shortCode;
+        updateCodeDisplay(shortCode);
         generateQR(id);
         setStatus('Online', true);
       });
-      
-      // Fallback: if no open event in 10s with custom ID, retry without
-      if (customId) {
-        setTimeout(() => {
-          if (!hasOpened && peer && !peer.destroyed) {
-            console.log('Timeout waiting for custom ID, retrying...');
-            peer.destroy();
-            initPeer();
-          }
-        }, 10000);
-      }
 
       peer.on('connection', c => {
         if (isDisconnecting) return;
@@ -419,20 +403,16 @@
         if (err.type === 'peer-unavailable') {
           showError('Peer not found');
           setStatus('Online', true);
-        } else if (err.type === 'unavailable-id' && !hasOpened) {
-          // Custom ID taken, retry with auto-generated
-          console.log('ID taken, using auto-generated...');
-          initPeer();
         } else if (err.type === 'network' || err.type === 'server-error') {
           setStatus('Reconnecting...', false);
-          setTimeout(() => initPeer(customId), 3000);
-        } else if (!hasOpened) {
+          setTimeout(initPeer, 3000);
+        } else {
           setStatus('Error: ' + err.type, false);
         }
       });
 
       peer.on('disconnected', () => {
-        if (!peer.destroyed && hasOpened) {
+        if (!peer.destroyed) {
           peer.reconnect();
         }
       });
@@ -465,10 +445,12 @@
 
     function updateCodeDisplay(code) {
       const box = document.getElementById('codeDisplay');
+      if (!box) return;
       box.innerHTML = '';
       box.style.display = 'flex';
       box.style.gap = '4px';
-      for (let i = 0; i < 6; i++) {
+      code = code.toUpperCase();
+      for (let i = 0; i < code.length; i++) {
         const d = document.createElement('div');
         d.className = 'digit';
         d.style.width = '2.5rem';
@@ -481,7 +463,7 @@
         d.style.background = 'var(--bg)';
         d.style.border = '2px solid var(--border)';
         d.style.borderRadius = '8px';
-        d.textContent = code[i] || '';
+        d.textContent = code[i];
         box.appendChild(d);
       }
     }
@@ -494,9 +476,9 @@
     }
 
     function connectToSender() {
-      const code = document.getElementById('receiveCode').value.trim().toUpperCase();
-      if (code.length !== 6) {
-        showError('Enter 6-character code');
+      const code = document.getElementById('receiveCode').value.trim();
+      if (!code) {
+        showError('Enter peer ID');
         return;
       }
       hideError();
