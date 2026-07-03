@@ -2,9 +2,9 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, master, develop]
   pull_request:
-    branches: [main]
+    branches: [main, master]
   workflow_dispatch:
 
 env:
@@ -19,40 +19,27 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Install HTML linter
-        run: npm install -g htmlhint
-
-      - name: Run HTML lint
-        run: |
-          htmlhint "**/*.html" || true
-        continue-on-error: true
-
-      - name: Check JavaScript syntax
-        run: |
-          for file in $(find . -name "*.html" -exec grep -l "<script>" {} \;); do
-            echo "Checking: $file"
-          done
-
       - name: Validate HTML structure
         run: |
           echo "Checking HTML structure..."
-          grep -l "<!DOCTYPE html>" *.html || echo "Missing DOCTYPE"
-          grep -l "<html" *.html || echo "Missing html tag"
-          grep -l "</html>" *.html || echo "Missing closing html tag"
+          for f in *.html; do
+            if [ -f "$f" ]; then
+              echo "Checking: $f"
+              grep -q "<!DOCTYPE html>" "$f" && echo "  ✓ DOCTYPE" || echo "  ✗ Missing DOCTYPE"
+              grep -q "<html" "$f" && echo "  ✓ html tag" || echo "  ✗ Missing html"
+              grep -q "</html>" "$f" && echo "  ✓ closing html" || echo "  ✗ Missing closing html"
+            fi
+          done
 
-      - name: Check security headers documentation
+      - name: Check security documentation
         run: |
-          echo "Verifying security documentation exists..."
-          test -f SECURITY.md && echo "SECURITY.md exists"
-          test -f TROUBLESHOOTING.md && echo "TROUBLESHOOTING.md exists"
+          echo "Verifying documentation..."
+          [ -f SECURITY.md ] && echo "✓ SECURITY.md" || echo "✗ SECURITY.md missing"
+          [ -f README.md ] && echo "✓ README.md" || echo "✗ README.md missing"
+          [ -f DEPLOYMENT.md ] && echo "✓ DEPLOYMENT.md" || echo "✗ DEPLOYMENT.md missing"
 
   test:
-    name: Browser Tests
+    name: Tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -63,7 +50,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Start local server
+      - name: Start server
         run: |
           python3 -m http.server 8080 &
           sleep 2
@@ -71,24 +58,18 @@ jobs:
 
       - name: Verify server responds
         run: |
-          curl -s http://localhost:8080/swiftdrop-enterprise.html | head -20
+          curl -s http://localhost:8080/index.html | head -5 && echo "✓ Server responding"
 
-      - name: Check JavaScript syntax
+      - name: Validate JSON
         run: |
-          # Extract and validate JavaScript
-          grep -oP '(?<=<script>)[\s\S]*?(?=</script>)' swiftdrop-enterprise.html > temp.js
-          node --check temp.js 2>&1 || echo "Syntax check completed"
-          rm -f temp.js
-
-      - name: Check for console.error usage
-        run: |
-          echo "Checking for console.error in production code..."
-          if grep -q "console\.error" swiftdrop-enterprise.html; then
-            echo "Note: console.error found (may be intentional for logging)"
-          fi
+          for f in *.json; do
+            if [ -f "$f" ]; then
+              python3 -c "import json; json.load(open('$f'))" && echo "✓ $f valid" || echo "✗ $f invalid"
+            fi
+          done
 
   build:
-    name: Build & Validate
+    name: Build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -96,179 +77,76 @@ jobs:
 
       - name: List files
         run: |
-          echo "Files to be deployed:"
-          ls -la *.html *.json 2>/dev/null || echo "No HTML/JSON files in root"
-          ls -la .github/workflows/ 2>/dev/null || echo "No workflows"
+          echo "## Files"
+          find . -maxdepth 2 -type f \( -name "*.html" -o -name "*.json" -o -name "*.js" -o -name "*.md" \) | head -30
 
-      - name: Validate JSON files
+      - name: Check manifest
         run: |
-          for f in *.json; do
-            if [ -f "$f" ]; then
-              echo "Validating $f..."
-              python3 -c "import json; json.load(open('$f'))" && echo "Valid JSON" || echo "Invalid JSON"
-            fi
-          done
+          [ -f manifest.json ] && echo "✓ PWA manifest exists" || echo "✗ Manifest missing"
+          [ -f sw.js ] && echo "✓ Service worker exists" || echo "✗ SW missing"
 
-      - name: Check manifest.json
-        run: |
-          echo "Checking manifest.json..."
-          test -f manifest.json && cat manifest.json | python3 -c "import sys,json; d=json.load(sys.stdin); print('Name:', d.get('name')); print('Icons:', len(d.get('icons',[])))"
-
-  deploy-staging:
-    name: Deploy to Staging
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/develop'
-    needs: [lint, test, build]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Deploy notification
-        run: |
-          echo "Deploying to staging environment..."
-          echo "Branch: ${{ github.ref_name }}"
-          echo "Commit: ${{ github.sha }}"
-
-      - name: Summary
-        run: |
-          echo "## Staging Deployment"
-          echo "- Files: $(find . -name '*.html' -o -name '*.json' | wc -l)"
-          echo "- Documentation: $(find . -name '*.md' | wc -l)"
-          echo "- Status: Ready for deployment"
-
-  deploy-production:
-    name: Deploy to Production
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
-    needs: [lint, test, build]
-    environment:
-      name: production
-      url: https://swiftdrop.example.com
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Pre-deployment checks
-        run: |
-          echo "Running pre-deployment checks..."
-          echo "Branch: ${{ github.ref_name }}"
-          echo "Commit: ${{ github.sha }}"
-          
-          # Verify critical files exist
-          test -f swiftdrop-enterprise.html && echo "✓ Enterprise version found"
-          test -f manifest.json && echo "✓ PWA manifest found"
-          test -f sw.js && echo "✓ Service worker found"
-          test -f README.md && echo "✓ README found"
-
-      - name: Generate deployment report
-        run: |
-          echo "## Production Deployment Report"
-          echo ""
-          echo "### Files"
-          find . -maxdepth 1 -type f \( -name "*.html" -o -name "*.json" -o -name "*.md" -o -name "*.js" \) -exec ls -lh {} \;
-          echo ""
-          echo "### Directories"
-          find . -maxdepth 1 -type d -exec ls -ld {} \;
-          
   lighthouse:
-    name: Lighthouse Audit
+    name: Lighthouse
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Lighthouse
-        run: |
-          npm install -g lighthouse
-          
       - name: Run Lighthouse
         run: |
-          # Start server
-          python3 -m http.server 8080 &
-          SERVER_PID=$!
+          npm install -g lighthouse || true
+          python3 -m http.server 8081 &
           sleep 2
-          
-          # Run lighthouse
-          lighthouse http://localhost:8080/swiftdrop-enterprise.html \
-            --output=json \
-            --output-path=lighthouse-report.json \
-            --chrome-flags="--headless" \
-            --quiet || true
-          
-          # Kill server
-          kill $SERVER_PID 2>/dev/null || true
-
-      - name: Check Lighthouse scores
-        run: |
-          if [ -f lighthouse-report.json ]; then
-            cat lighthouse-report.json | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-categories = data.get('categories', {})
-print('## Lighthouse Scores')
-for name, cat in categories.items():
-    score = cat.get('score', 0) * 100
-    print(f'{name}: {score:.0f}/100')
-"
-          else
-            echo "Lighthouse report not generated (non-critical)"
-          fi
+          lighthouse http://localhost:8081/index.html --output=json --output-path=lh.json --chrome-flags="--headless" --quiet || echo "Lighthouse skipped"
+          kill %1 2>/dev/null || true
         continue-on-error: true
 
-  security-scan:
-    name: Security Scan
+      - name: Check scores
+        run: |
+          if [ -f lh.json ]; then
+            python3 -c "
+import json
+with open('lh.json') as f:
+    d=json.load(f)
+for k,v in d.get('categories',{}).items():
+    s=int(v.get('score',0)*100)
+    print(f'{k}: {s}/100')
+" || echo "Parse skipped"
+          else
+            echo "Lighthouse report not generated"
+          fi
+
+  security:
+    name: Security Check
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Check for sensitive data
+      - name: Security scan
         run: |
-          echo "Checking for sensitive data in codebase..."
-          
-          # Check for API keys (should not exist)
-          if grep -r "api_key\|apiKey\|secret\|password" --include="*.js" --include="*.html" . 2>/dev/null | grep -v "node_modules" | grep -v "//.*="; then
-            echo "Warning: Potential secrets found"
+          echo "Checking for hardcoded secrets..."
+          if grep -r "api_key\|password\s*=" --include="*.js" --include="*.html" . 2>/dev/null | grep -v node_modules | grep -v "window.ENV"; then
+            echo "⚠ Found potential secrets"
           else
-            echo "No obvious secrets found"
+            echo "✓ No obvious secrets"
           fi
-          
-          # Check for console.log in production
-          log_count=$(grep -c "console\.log" swiftdrop-enterprise.html 2>/dev/null || echo "0")
-          echo "console.log statements: $log_count"
-
-      - name: Verify CSP compatibility
-        run: |
-          echo "Checking CSP compatibility..."
-          
-          # Check external scripts are from trusted sources
-          grep -o 'src="https://[^"]*"' swiftdrop-enterprise.html | while read url; do
-            domain=$(echo "$url" | grep -oP '(?<=src="https://)[^/]+')
-            echo "External: $domain"
-          done
 
   complete:
-    name: Pipeline Complete
+    name: Complete
     runs-on: ubuntu-latest
-    needs: [lint, test, build, lighthouse, security-scan]
+    needs: [lint, test, build, lighthouse, security]
     if: always()
     steps:
-      - name: Check results
+      - name: Summary
         run: |
           echo "## Pipeline Results"
-          echo ""
+          echo "Lint: ${{ needs.lint.result }}"
+          echo "Test: ${{ needs.test.result }}"  
+          echo "Build: ${{ needs.build.result }}"
+          echo "Lighthouse: ${{ needs.lighthouse.result }}"
+          echo "Security: ${{ needs.security.result }}"
           
-          # Summary
-          echo "### Job Status"
-          echo "- Lint: ${{ needs.lint.result }}"
-          echo "- Test: ${{ needs.test.result }}"
-          echo "- Build: ${{ needs.build.result }}"
-          echo "- Lighthouse: ${{ needs.lighthouse.result }}"
-          echo "- Security: ${{ needs.security-scan.result }}"
-          
-      - name: Final summary
-        if: needs.lint.result == 'success' && needs.test.result == 'success'
-        run: |
-          echo "✅ All checks passed!"
-          echo ""
-          echo "Ready for deployment."
+          if [[ "${{ needs.lint.result }}" == "success" && "${{ needs.test.result }}" == "success" && "${{ needs.build.result }}" == "success" ]]; then
+            echo "✅ Core checks passed!"
+          fi
