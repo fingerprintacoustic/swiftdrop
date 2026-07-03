@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>SwiftDrop Test Runner</title>
+  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  <style>
+    body { font-family: monospace; background: #0a0a0b; color: #fff; padding: 20px; }
+    h1 { color: #6366f1; }
+    .pass { color: #22c55e; }
+    .fail { color: #ef4444; }
+    .loading { color: #f59e0b; }
+    #results { margin-top: 20px; }
+    .test-result { padding: 5px 10px; margin: 2px 0; border-radius: 4px; }
+    .test-result.pass { background: rgba(34,197,94,0.1); }
+    .test-result.fail { background: rgba(239,68,68,0.1); color: #ef4444; }
+    .summary { font-size: 1.2em; margin-top: 20px; padding: 15px; border-radius: 8px; }
+    .summary.pass { background: rgba(34,197,94,0.2); border: 1px solid #22c55e; }
+    .summary.fail { background: rgba(239,68,68,0.2); border: 1px solid #ef4444; }
+  </style>
+</head>
+<body>
+  <h1>SwiftDrop Test Suite</h1>
+  <p class="loading" id="status">Loading...</p>
+  <div id="results"></div>
+  <div id="summary"></div>
+  
+  <script src="test_swiftdrop.js"></script>
+  <script>
+    // Mock SwiftDrop for standalone testing
+    window.SwiftDrop = {
+      state: {
+        mode: 'send',
+        transfers: new Map(),
+        myCode: 'TESTAB',
+        peer: { id: 'swd-test123456', open: true }
+      },
+      CONFIG: {
+        CHUNK_SIZE: 256 * 1024,
+        SESSION_EXPIRY_MS: 15 * 60 * 1000,
+        MAX_RETRIES: 3,
+        RETRY_DELAY_MS: 1000,
+        PROGRESS_UPDATE_INTERVAL: 100,
+        MAX_CONCURRENT_FILES: 5
+      },
+      TransferState: function(id, file, direction) {
+        this.id = id;
+        this.file = file;
+        this.direction = direction;
+        this.status = 'pending';
+        this.progress = 0;
+        this.bytesTransferred = 0;
+        this.totalBytes = file.size;
+        this.speed = 0;
+        this.isPaused = false;
+        this.isCancelled = false;
+      },
+      RTC_CONFIG: {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' }
+        ]
+      }
+    };
+    
+    async function run() {
+      var status = document.getElementById('status');
+      var resultsDiv = document.getElementById('results');
+      var startTime = Date.now();
+      
+      status.textContent = 'Running tests...';
+      status.className = '';
+      
+      try {
+        var result = await runTests();
+        
+        // Display individual results
+        var runner = {
+          results: [],
+          passed: result.passed,
+          failed: result.failed
+        };
+        
+        var elapsed = Date.now() - startTime;
+        
+        // Show summary
+        var summaryDiv = document.getElementById('summary');
+        summaryDiv.innerHTML = '<div class="summary ' + (result.failed > 0 ? 'fail' : 'pass') + '">' +
+          '<strong>Test Complete</strong><br>' +
+          'Passed: ' + result.passed + '<br>' +
+          'Failed: ' + result.failed + '<br>' +
+          'Time: ' + elapsed + 'ms' +
+          '</div>';
+        
+        status.textContent = 'Tests complete!';
+        
+      } catch (err) {
+        status.textContent = 'Error: ' + err.message;
+        status.className = 'fail';
+      }
+    }
+    
+    run();
+  </script>
+</body>
+</html>
