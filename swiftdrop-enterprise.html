@@ -759,7 +759,7 @@ function initPeer() {
     Logger.info('Peer', `Connected with ID: ${id}`);
     state.myCode = shortCode;
     document.getElementById('myCode').textContent = state.myCode;
-    generateQRCode(id);
+    generateQRCode(shortCode);
     setStatus('Online - Share your code', 'online');
   });
 
@@ -1521,7 +1521,7 @@ function showReceiveSetup() {
 // QR CODE & LINK SHARING
 // ============================================================================
 
-function generateQRCode(peerId) {
+function generateQRCode(code) {
   const container = document.getElementById('qrContainer');
   
   let baseUrl = window.location.href;
@@ -1530,7 +1530,7 @@ function generateQRCode(peerId) {
   baseUrl = baseUrl.replace(/\/$/, '');
   baseUrl += '/';
   
-  const shareUrl = baseUrl + '?join=' + encodeURIComponent(peerId);
+  const shareUrl = baseUrl + '?join=' + encodeURIComponent(code);
   const qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' + encodeURIComponent(shareUrl);
   
   container.innerHTML = `<img src="${qrUrl}" width="180" height="180" alt="QR Code" style="border-radius: 8px; background: white; padding: 8px;">`;
