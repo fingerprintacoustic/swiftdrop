@@ -777,7 +777,26 @@ function initPeer() {
     debug: 0
   });
 
+  const thisPeer = state.peer;
+
+  // PeerJS's free cloud signaling server can be slow, rate-limited, or
+  // blocked outright on some networks/carriers -- when that happens the
+  // 'open' event just never fires, with no error either, leaving the UI
+  // stuck on "Connecting..." forever with no feedback. Give it a bounded
+  // window, then surface it clearly and retry automatically instead of
+  // hanging silently.
+  const connectTimeout = setTimeout(() => {
+    if (state.peer === thisPeer && !thisPeer.open) {
+      Logger.error('Peer', 'Timed out waiting for signaling server after 12s');
+      showError('Still connecting -- this can happen on some networks. Retrying...');
+      setStatus('Retrying connection...', 'connecting');
+      try { thisPeer.destroy(); } catch (e) {}
+      initPeer();
+    }
+  }, 12000);
+
   state.peer.on('open', (id) => {
+    clearTimeout(connectTimeout);
     Logger.info('Peer', `Connected with ID: ${id}`);
     state.myCode = shortCode;
     document.getElementById('myCode').textContent = state.myCode;
@@ -810,6 +829,7 @@ function initPeer() {
   });
 
   state.peer.on('error', (err) => {
+    clearTimeout(connectTimeout);
     Logger.error('Peer', `Error: ${err.type}`, { error: err });
     Metrics.increment('connectionsFailed');
     
