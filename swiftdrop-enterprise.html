@@ -190,8 +190,17 @@
           <line x1="12" y1="3" x2="12" y2="15"/>
         </svg>
         <p>Drop files here or click to select</p>
-        <small>Sends to everyone currently connected</small>
+        <small>You'll choose who receives it next</small>
         <input type="file" id="sendFileInput" multiple hidden aria-hidden="true">
+      </div>
+
+      <div class="hidden" id="recipientPicker" style="background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 1rem; margin: 1rem 0;">
+        <p style="font-size: 0.8rem; color: var(--text-dim); margin-bottom: 0.75rem;" id="recipientPickerLabel">Send to:</p>
+        <div id="recipientCheckboxes" style="margin-bottom: 1rem;"></div>
+        <div style="display: flex; gap: 0.5rem;">
+          <button class="btn btn-primary" style="flex:1;" onclick="confirmSend()">Send</button>
+          <button class="btn btn-secondary" onclick="cancelPendingSend()">Cancel</button>
+        </div>
       </div>
 
       <div class="files" id="filesList" role="list" aria-label="Transfers"></div>
@@ -324,7 +333,8 @@ const state = {
   transfers: new Map(),          // transferId -> TransferState
   sessionStartTime: 0,
   sessionExpiryTimer: null,
-  isDisconnecting: false
+  isDisconnecting: false,
+  pendingSendFiles: null
 };
 
 class TransferState {
@@ -709,25 +719,74 @@ function handleFilesSelected(files) {
     return;
   }
 
-  Logger.info('Files', `Selected ${files.length} file(s)`);
-
-  Array.from(files).forEach((file, index) => {
+  const validFiles = Array.from(files).filter((file) => {
     if (file.size === 0) {
       Logger.warn('Files', `Skipped empty file: ${file.name}`);
       showError(`Cannot send empty file: ${escapeHtml(file.name)}`);
-      return;
+      return false;
     }
+    return true;
+  });
+  if (validFiles.length === 0) return;
 
+  Logger.info('Files', `Staged ${validFiles.length} file(s) for sending -- awaiting recipient selection`);
+  state.pendingSendFiles = validFiles;
+  renderRecipientPicker();
+}
+
+function renderRecipientPicker() {
+  const picker = document.getElementById('recipientPicker');
+  const label = document.getElementById('recipientPickerLabel');
+  const box = document.getElementById('recipientCheckboxes');
+
+  const files = state.pendingSendFiles || [];
+  const fileNames = files.map((f) => f.name).join(', ');
+  label.textContent = `Send "${fileNames}" to:`;
+
+  box.innerHTML = '';
+  state.connections.forEach((conn, peerId) => {
+    const row = document.createElement('label');
+    row.style.cssText = 'display:flex;align-items:center;gap:0.5rem;padding:0.4rem 0;font-family:"SF Mono","Fira Code",monospace;font-size:0.85rem;cursor:pointer;';
+    row.innerHTML = `<input type="checkbox" class="recipient-checkbox" value="${peerId}" checked style="width:16px;height:16px;"> ${escapeHtml(codeOf(peerId))}`;
+    box.appendChild(row);
+  });
+
+  picker.classList.remove('hidden');
+}
+
+function cancelPendingSend() {
+  state.pendingSendFiles = null;
+  document.getElementById('recipientPicker').classList.add('hidden');
+  document.getElementById('recipientCheckboxes').innerHTML = '';
+}
+
+function confirmSend() {
+  const files = state.pendingSendFiles;
+  if (!files || files.length === 0) { cancelPendingSend(); return; }
+
+  const checked = Array.from(document.querySelectorAll('#recipientCheckboxes .recipient-checkbox'))
+    .filter((cb) => cb.checked)
+    .map((cb) => cb.value);
+
+  if (checked.length === 0) {
+    showError('Select at least one recipient, or Cancel.');
+    return;
+  }
+
+  files.forEach((file, index) => {
     const baseId = generateSecureId() + '-' + Date.now();
-
-    state.connections.forEach((conn, peerId) => {
+    checked.forEach((peerId) => {
+      const conn = state.connections.get(peerId);
+      if (!conn) return;
       const transferId = baseId + '::' + peerId;
       const transfer = new TransferState(transferId, file, 'send', peerId);
       state.transfers.set(transferId, transfer);
-
       setTimeout(() => startFileSend(transfer, conn), index * 100);
     });
   });
+
+  Logger.info('Files', `Sending ${files.length} file(s) to ${checked.length} chosen recipient(s)`);
+  cancelPendingSend();
 }
 
 async function startFileSend(transfer, conn) {
@@ -1367,6 +1426,9 @@ window.SwiftDrop = {
   connectToPeer,
   disconnectPeer,
   leaveRoom,
+  handleFilesSelected,
+  confirmSend,
+  cancelPendingSend,
   pauseTransfer,
   resumeTransfer,
   cancelTransfer,
