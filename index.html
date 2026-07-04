@@ -1681,7 +1681,14 @@ function generateSecureId() {
 }
 
 function sanitizeFilename(name) {
-  return name.replace(/[\/\\..\x00-\x1f]/g, '_').slice(0, 255);
+  // Block path traversal (".." sequences) and path separators/control chars,
+  // but leave ordinary single dots alone -- the previous regex replaced
+  // EVERY dot with "_", silently stripping the extension off every single
+  // downloaded file (photo.jpg -> photo_jpg).
+  return name
+    .replace(/\.\.+/g, '_')
+    .replace(/[\/\\\x00-\x1f]/g, '_')
+    .slice(0, 255);
 }
 
 function escapeHtml(text) {

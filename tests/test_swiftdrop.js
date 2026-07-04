@@ -76,7 +76,10 @@ var utils = {
   },
 
   sanitizeFilename: function(name) {
-    return name.replace(/[\/\\..\x00-\x1f]/g, '_').slice(0, 255);
+    return name
+      .replace(/\.\.+/g, '_')
+      .replace(/[\/\\\x00-\x1f]/g, '_')
+      .slice(0, 255);
   },
 
   escapeHtml: function(text) {
@@ -148,8 +151,9 @@ async function runTests() {
   });
 
   await runner.run('Test: sanitizeFilename removes dangerous characters', async function() {
-    runner.assertEqual(utils.sanitizeFilename('normal.txt'), 'normal.txt');
-    runner.assertEqual(utils.sanitizeFilename('../../../etc/passwd'), '_.._.._etc_passwd');
+    runner.assertEqual(utils.sanitizeFilename('normal.txt'), 'normal.txt', 'ordinary extensions must survive');
+    runner.assertEqual(utils.sanitizeFilename('archive.tar.gz'), 'archive.tar.gz', 'multi-dot extensions must survive');
+    runner.assertEqual(utils.sanitizeFilename('../../../etc/passwd'), '______etc_passwd');
     runner.assertEqual(utils.sanitizeFilename('test\x00name'), 'test_name');
     runner.assertEqual(utils.sanitizeFilename('a'.repeat(300)).length, 255);
   });
