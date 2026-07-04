@@ -3,7 +3,7 @@
  * PWA offline support and caching
  */
 
-const CACHE_NAME = 'swiftdrop-v1';
+const CACHE_NAME = 'swiftdrop-v2';
 const STATIC_ASSETS = [
   '/',
   '/swiftdrop-enterprise.html',
@@ -35,7 +35,8 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Fetch event - serve from cache, fallback to network
+// Fetch event - network-first (so pushed updates are seen immediately),
+// falling back to cache only when the network is unavailable.
 self.addEventListener('fetch', (event) => {
   // Skip non-GET requests
   if (event.request.method !== 'GET') return;
@@ -47,35 +48,26 @@ self.addEventListener('fetch', (event) => {
   if (event.request.url.includes('/api/')) return;
   
   event.respondWith(
-    caches.match(event.request)
-      .then((cachedResponse) => {
-        if (cachedResponse) {
-          return cachedResponse;
+    fetch(event.request)
+      .then((response) => {
+        if (!response || response.status !== 200 || response.type !== 'basic') {
+          return response;
         }
-        
-        return fetch(event.request)
-          .then((response) => {
-            // Don't cache non-successful responses
-            if (!response || response.status !== 200 || response.type !== 'basic') {
-              return response;
-            }
-            
-            // Clone the response
-            const responseToCache = response.clone();
-            
-            caches.open(CACHE_NAME)
-              .then((cache) => {
-                cache.put(event.request, responseToCache);
-              });
-            
-            return response;
-          })
-          .catch(() => {
-            // Return offline page for navigation requests
-            if (event.request.mode === 'navigate') {
-              return caches.match('/swiftdrop-enterprise.html');
-            }
-          });
+
+        const responseToCache = response.clone();
+        caches.open(CACHE_NAME).then((cache) => {
+          cache.put(event.request, responseToCache);
+        });
+
+        return response;
+      })
+      .catch(() => {
+        return caches.match(event.request).then((cachedResponse) => {
+          if (cachedResponse) return cachedResponse;
+          if (event.request.mode === 'navigate') {
+            return caches.match('/swiftdrop-enterprise.html');
+          }
+        });
       })
   );
 });
