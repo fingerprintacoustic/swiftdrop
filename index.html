@@ -556,6 +556,7 @@ class TransferState {
     this.expectedChunks = 0;
     this.sha256 = null;
     this.fileHash = null;
+    this.chunkHashes = [];
     this.isPaused = false;
     this.isCancelled = false;
     this.retryCount = 0;
@@ -730,12 +731,25 @@ function updateExpiryDisplay() {
 // PEER CONNECTION
 // ============================================================================
 
+function generateShortCode() {
+  // Unambiguous alphabet (no 0/O/1/I) to avoid transcription errors.
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const array = new Uint8Array(6);
+  crypto.getRandomValues(array);
+  return Array.from(array).map((b) => chars[b % chars.length]).join('');
+}
+
 function initPeer() {
   setStatus('Connecting...', 'connecting');
   Logger.info('Peer', 'Initializing peer connection');
-  
-  const peerId = 'swd-' + generateSecureId();
-  
+
+  // The short code IS the peer ID suffix -- it must be reversible back into
+  // a connectable PeerJS ID. Previously the code displayed was the last 6
+  // characters of a much longer random ID with no way to recover the full
+  // ID from it, so every connection attempt failed with "peer-unavailable".
+  const shortCode = generateShortCode();
+  const peerId = 'swd-' + shortCode;
+
   state.peer = new Peer(peerId, {
     config: RTC_CONFIG,
     debug: 0
@@ -743,7 +757,7 @@ function initPeer() {
 
   state.peer.on('open', (id) => {
     Logger.info('Peer', `Connected with ID: ${id}`);
-    state.myCode = id.slice(-6).toUpperCase();
+    state.myCode = shortCode;
     document.getElementById('myCode').textContent = state.myCode;
     generateQRCode(id);
     setStatus('Online - Share your code', 'online');
@@ -827,8 +841,12 @@ function connectToSender() {
   Logger.info('Connection', `Attempting to connect to: ${code}`);
   
   document.getElementById('connectBtn').disabled = true;
-  
-  const conn = state.peer.connect(code, {
+
+  // The displayed/shared code is the peer ID suffix, not the full ID --
+  // reconstruct the real ID PeerJS actually registered.
+  const targetPeerId = 'swd-' + code.toUpperCase();
+
+  const conn = state.peer.connect(targetPeerId, {
     reliable: true,
     serialization: 'binary'
   });
@@ -999,18 +1017,14 @@ async function startFileSend(transfer) {
   updateTransferUI(transfer);
   
   try {
-    const hash = await computeFileHash(transfer.file);
-    transfer.fileHash = hash;
-    
     sendMessage({
       type: 'file-start',
       id: transfer.id,
       name: sanitizeFilename(transfer.file.name),
       size: transfer.file.size,
-      mimeType: transfer.file.type || 'application/octet-stream',
-      hash: hash
+      mimeType: transfer.file.type || 'application/octet-stream'
     });
-    
+
     await streamFileChunks(transfer);
     
   } catch (err) {
@@ -1027,11 +1041,49 @@ async function streamFileChunks(transfer) {
   let offset = 0;
   let chunkIndex = 0;
   const totalChunks = Math.ceil(file.size / CONFIG.CHUNK_SIZE);
-  
+
   const reader = file.stream().getReader();
-  
+  let buffer = new Uint8Array(0);
+
+  function appendToBuffer(newData) {
+    const merged = new Uint8Array(buffer.byteLength + newData.byteLength);
+    merged.set(buffer, 0);
+    merged.set(newData, buffer.byteLength);
+    buffer = merged;
+  }
+
+  async function sendChunk(bytes) {
+    const base64 = arrayBufferToBase64(bytes);
+    const chunkDigest = await crypto.subtle.digest('SHA-256', bytes);
+    transfer.chunkHashes.push(chunkDigest);
+
+    sendMessage({
+      type: 'file-chunk',
+      id: transfer.id,
+      chunk: base64,
+      index: chunkIndex,
+      total: totalChunks,
+      size: bytes.byteLength,
+      progress: Math.round((offset / file.size) * 100)
+    });
+
+    offset += bytes.byteLength;
+    chunkIndex++;
+
+    transfer.bytesTransferred = offset;
+    transfer.progress = Math.round((offset / file.size) * 100);
+
+    const now = Date.now();
+    if (now - transfer.lastUpdate >= CONFIG.PROGRESS_UPDATE_INTERVAL) {
+      const elapsed = (now - transfer.startTime) / 1000;
+      transfer.speed = offset / elapsed;
+      transfer.lastUpdate = now;
+      updateTransferUI(transfer);
+    }
+  }
+
   try {
-    while (offset < file.size) {
+    while (true) {
       if (transfer.isCancelled) {
         sendMessage({ type: 'transfer-cancelled', id: transfer.id });
         transfer.status = 'cancelled';
@@ -1039,51 +1091,51 @@ async function streamFileChunks(transfer) {
         updateTransferUI(transfer);
         return;
       }
-      
+
       while (transfer.isPaused) {
         await sleep(100);
         if (transfer.isCancelled) return;
       }
-      
-      const chunkSize = Math.min(CONFIG.CHUNK_SIZE, file.size - offset);
-      const chunk = new Uint8Array(chunkSize);
-      const result = await reader.read(chunk);
-      
-      if (result.done) break;
-      
-      const base64 = arrayBufferToBase64(chunk);
-      
-      sendMessage({
-        type: 'file-chunk',
-        id: transfer.id,
-        chunk: base64,
-        index: chunkIndex,
-        total: totalChunks,
-        progress: Math.round((offset / file.size) * 100)
-      });
-      
-      offset += chunk.byteLength;
-      chunkIndex++;
-      
-      transfer.bytesTransferred = offset;
-      transfer.progress = Math.round((offset / file.size) * 100);
-      
-      const now = Date.now();
-      if (now - transfer.lastUpdate >= CONFIG.PROGRESS_UPDATE_INTERVAL) {
-        const elapsed = (now - transfer.startTime) / 1000;
-        transfer.speed = offset / elapsed;
-        transfer.lastUpdate = now;
-        updateTransferUI(transfer);
+
+      // NOTE: file.stream().getReader() returns a default (non-BYOB) reader.
+      // read() takes no arguments -- the real bytes come back in
+      // result.value. The previous code passed a pre-allocated buffer to
+      // read() and sent that buffer instead, which the spec silently
+      // ignores, so every transfer sent all-zero data.
+      const { value, done } = await reader.read();
+
+      if (value && value.byteLength) {
+        appendToBuffer(value);
+      }
+
+      // Flush the buffer in deterministic CONFIG.CHUNK_SIZE pieces so chunk
+      // count/progress stay meaningful regardless of the browser's internal
+      // stream chunk sizing.
+      while (buffer.byteLength >= CONFIG.CHUNK_SIZE) {
+        const piece = buffer.slice(0, CONFIG.CHUNK_SIZE);
+        buffer = buffer.slice(CONFIG.CHUNK_SIZE);
+        await sendChunk(piece);
+      }
+
+      if (done) {
+        if (buffer.byteLength > 0) {
+          await sendChunk(buffer);
+          buffer = new Uint8Array(0);
+        }
+        break;
       }
     }
-    
+
+    const finalHash = await hashChunkList(transfer.chunkHashes);
+    transfer.fileHash = finalHash;
+
     sendMessage({
       type: 'file-complete',
       id: transfer.id,
-      hash: transfer.fileHash,
+      hash: finalHash,
       size: file.size
     });
-    
+
     transfer.status = 'completed';
     transfer.progress = 100;
     transfer.bytesTransferred = file.size;
@@ -1091,7 +1143,7 @@ async function streamFileChunks(transfer) {
     Metrics.add('bytesTransferred', file.size);
     Logger.info('Transfer', `Completed: ${transfer.file.name}`);
     updateTransferUI(transfer);
-    
+
   } catch (err) {
     throw err;
   } finally {
@@ -1138,15 +1190,13 @@ function handleFileStart(data) {
   const file = {
     name: data.name,
     size: data.size,
-    type: data.mimeType || 'application/octet-stream',
-    hash: data.hash
+    type: data.mimeType || 'application/octet-stream'
   };
   
   const transfer = new TransferState(data.id, file, 'receive');
   transfer.status = 'receiving';
   transfer.startTime = Date.now();
   transfer.expectedChunks = Math.ceil(data.size / CONFIG.CHUNK_SIZE);
-  transfer.fileHash = data.hash;
   transfer.chunks = [];
   
   state.transfers.set(data.id, transfer);
@@ -1166,8 +1216,18 @@ function handleFileChunk(data) {
   
   transfer.chunks.push(data.chunk);
   transfer.chunksReceived++;
-  transfer.bytesTransferred = transfer.chunksReceived * CONFIG.CHUNK_SIZE;
+  transfer.bytesTransferred += (data.size || 0);
   transfer.progress = data.progress || Math.round((transfer.bytesTransferred / transfer.totalBytes) * 100);
+
+  // Hash this chunk now (cheap, bounded memory) so full-file verification
+  // doesn't require re-reading the reassembled blob later. Hashing is async,
+  // so track the promise -- file-complete must await all of these before
+  // combining, since chunks can still be hashing when it arrives.
+  transfer.chunkHashPromises = transfer.chunkHashPromises || [];
+  const chunkBytes = base64ToArrayBuffer(data.chunk);
+  transfer.chunkHashPromises[data.index] = crypto.subtle.digest('SHA-256', chunkBytes).then((digest) => {
+    transfer.chunkHashes[data.index] = digest;
+  });
   
   const now = Date.now();
   if (now - transfer.lastUpdate >= CONFIG.PROGRESS_UPDATE_INTERVAL) {
@@ -1184,9 +1244,11 @@ async function handleFileComplete(data) {
   
   try {
     const blob = await reassembleFile(transfer);
-    const receivedHash = await computeBlobHash(blob);
-    
-    if (receivedHash === transfer.fileHash) {
+
+    await Promise.all(transfer.chunkHashPromises || []);
+    const receivedHash = await hashChunkList(transfer.chunkHashes);
+
+    if (receivedHash === data.hash) {
       transfer.status = 'completed';
       transfer.progress = 100;
       Metrics.increment('transfersCompleted');
@@ -1320,25 +1382,18 @@ function retryTransfer(transferId) {
 // HASH COMPUTATION
 // ============================================================================
 
-async function computeFileHash(file) {
-  // For large files, hash first and last 1MB for performance
-  const sampleSize = Math.min(file.size, 2 * 1024 * 1024);
-  const start = file.slice(0, sampleSize);
-  const end = file.slice(-sampleSize);
-  const combined = new Blob([start, end]);
-  const buffer = await combined.arrayBuffer();
-  const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
-  return arrayBufferToHex(hashBuffer);
-}
-
-async function computeBlobHash(blob) {
-  const sampleSize = Math.min(blob.size, 2 * 1024 * 1024);
-  const start = blob.slice(0, sampleSize);
-  const end = blob.slice(-sampleSize);
-  const combined = new Blob([start, end]);
-  const buffer = await combined.arrayBuffer();
-  const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
-  return arrayBufferToHex(hashBuffer);
+// Combines an array of per-chunk SHA-256 digests (each 32 bytes) into a
+// single digest that covers the entire file, without ever needing to hold
+// the whole file in memory at once. Both sides compute this the same way
+// from the chunks as they stream past, so it verifies every byte of the
+// file rather than just a sample of the first/last 1MB.
+async function hashChunkList(chunkDigests) {
+  const combined = new Uint8Array(chunkDigests.length * 32);
+  chunkDigests.forEach((digest, i) => {
+    combined.set(new Uint8Array(digest), i * 32);
+  });
+  const finalDigest = await crypto.subtle.digest('SHA-256', combined);
+  return arrayBufferToHex(finalDigest);
 }
 
 // ============================================================================
@@ -1719,7 +1774,7 @@ window.SwiftDrop = {
   retryTransfer,
   disconnectSession,
   connectToSender,
-  computeFileHash,
+  hashChunkList,
   streamFileChunks,
   handleFileComplete,
   formatSize,
