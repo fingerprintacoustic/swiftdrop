@@ -15,7 +15,29 @@
   <!-- CSP: Content-Security-Policy -->
   <!-- X-Frame-Options: DENY -->
   <!-- X-Content-Type-Options: nosniff -->
-  
+
+  <script>
+    // This app has no service worker registration and needs none (it
+    // requires live network access to the signaling server regardless of
+    // "offline" caching, so there's no real benefit to it, only staleness
+    // risk). If a service worker was ever installed here in an earlier
+    // testing session, it will otherwise keep intercepting requests and
+    // silently serving old cached pages forever, with no way for a future
+    // code push to fix it. This actively removes any such leftover
+    // registration and its cache on every load, so a fresh page load
+    // always means fresh code -- no manual cache-clearing required.
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then((regs) => {
+        regs.forEach((reg) => reg.unregister());
+      }).catch(() => {});
+    }
+    if (window.caches && caches.keys) {
+      caches.keys().then((names) => {
+        names.forEach((name) => caches.delete(name));
+      }).catch(() => {});
+    }
+  </script>
+
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
