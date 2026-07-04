@@ -196,16 +196,17 @@ async function runTests() {
 
   await runner.run('Test: Initial state exists', async function() {
     runner.assert(sw.state !== undefined, 'State should exist');
-    runner.assertEqual(sw.state.mode, 'send', 'Default mode should be send');
+    runner.assert(sw.state.connections instanceof Map, 'connections should be a Map');
+    runner.assertEqual(sw.state.connections.size, 0, 'Should start with no connections');
   });
 
   await runner.run('Test: Configuration values are correct', async function() {
     runner.assertEqual(sw.CONFIG.CHUNK_SIZE, 256 * 1024, 'Chunk size should be 256KB');
-    runner.assertEqual(sw.CONFIG.SESSION_EXPIRY_MS, 15 * 60 * 1000, 'Session expiry should be 15 min');
+    runner.assert(sw.CONFIG.MAX_PEERS > 1, 'Should support more than one simultaneous peer');
   });
 
   await runner.run('Test: RTC_CONFIG has ICE servers', async function() {
-    var servers = sw.CONFIG.RTC_CONFIG.iceServers;
+    var servers = sw.RTC_CONFIG.iceServers;
     runner.assert(servers.length >= 2, 'Should have at least 2 ICE servers');
     runner.assertContains(servers[0].urls, 'stun', 'First server should be STUN');
   });
