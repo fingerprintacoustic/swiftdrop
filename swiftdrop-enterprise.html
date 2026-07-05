@@ -334,7 +334,8 @@ const state = {
   sessionStartTime: 0,
   sessionExpiryTimer: null,
   isDisconnecting: false,
-  pendingSendFiles: null
+  pendingSendFiles: null,
+  ackWaiters: new Map() // transferId -> resolver called on transfer-ack/nack
 };
 
 class TransferState {
@@ -683,6 +684,45 @@ function sendTo(conn, data) {
   }
 }
 
+// A real WebRTC DataChannel can silently queue or drop data if you call
+// send() faster than it can actually flush to the network -- there's no
+// exception, no signal, nothing; the sender just keeps "succeeding"
+// locally while the receiver gets partial or no data. Before each chunk,
+// wait for the channel's outgoing buffer to drain below a threshold.
+const MAX_BUFFERED_BYTES = 4 * 1024 * 1024; // 4MB of unsent data allowed to queue
+
+function waitForBufferedAmountLow(conn) {
+  return new Promise((resolve) => {
+    const check = () => {
+      const dc = conn && conn.dataChannel;
+      if (!conn || !conn.open) { resolve(); return; }
+      if (!dc || dc.bufferedAmount <= MAX_BUFFERED_BYTES) { resolve(); return; }
+      setTimeout(check, 30);
+    };
+    check();
+  });
+}
+
+// The sender finishing its own read/send loop only proves it CALLED
+// send() the right number of times -- not that the receiver got any of
+// it. Every transfer now waits for an explicit ack/nack from the
+// receiver (sent after it verifies the full-file hash) before being
+// marked completed, with a bounded timeout so a disconnected or
+// unresponsive peer doesn't hang forever.
+function waitForAck(transferId, timeoutMs) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      state.ackWaiters.delete(transferId);
+      resolve({ ok: false, timedOut: true });
+    }, timeoutMs);
+    state.ackWaiters.set(transferId, (ok, error) => {
+      clearTimeout(timer);
+      state.ackWaiters.delete(transferId);
+      resolve({ ok, error });
+    });
+  });
+}
+
 function handleIncomingData(fromPeerId, data) {
   switch (data.type) {
     case 'room-members':
@@ -700,6 +740,16 @@ function handleIncomingData(fromPeerId, data) {
     case 'file-start': handleFileStart(fromPeerId, data); break;
     case 'file-chunk': handleFileChunk(fromPeerId, data); break;
     case 'file-complete': handleFileComplete(fromPeerId, data); break;
+    case 'transfer-ack': {
+      const waiter = state.ackWaiters.get(data.id);
+      if (waiter) waiter(true);
+      break;
+    }
+    case 'transfer-nack': {
+      const waiter = state.ackWaiters.get(data.id);
+      if (waiter) waiter(false, data.error);
+      break;
+    }
     case 'transfer-cancelled': handleTransferCancelled(fromPeerId, data); break;
     case 'transfer-paused': handleTransferPaused(fromPeerId, data); break;
     case 'transfer-resumed': handleTransferResumed(fromPeerId, data); break;
@@ -839,6 +889,9 @@ async function streamFileChunks(transfer, conn) {
     const chunkDigest = await crypto.subtle.digest('SHA-256', bytes);
     transfer.chunkHashes.push(chunkDigest);
 
+    await waitForBufferedAmountLow(conn);
+    if (!conn.open) throw new Error('Connection closed mid-transfer');
+
     sendTo(conn, {
       type: 'file-chunk',
       id: transfer.id,
@@ -899,12 +952,26 @@ async function streamFileChunks(transfer, conn) {
 
     sendTo(conn, { type: 'file-complete', id: transfer.id, hash: finalHash, size: file.size });
 
-    transfer.status = 'completed';
+    transfer.status = 'verifying';
     transfer.progress = 100;
     transfer.bytesTransferred = file.size;
-    Metrics.increment('transfersCompleted');
-    Metrics.add('bytesTransferred', file.size);
-    Logger.info('Transfer', `Completed send to ${transfer.peerId}: ${transfer.file.name}`);
+    updateTransferUI(transfer);
+
+    const ackResult = await waitForAck(transfer.id, 20000);
+
+    if (ackResult.ok) {
+      transfer.status = 'completed';
+      Metrics.increment('transfersCompleted');
+      Metrics.add('bytesTransferred', file.size);
+      Logger.info('Transfer', `Completed send to ${transfer.peerId}: ${transfer.file.name}`);
+    } else {
+      transfer.status = 'failed';
+      transfer.lastError = ackResult.timedOut
+        ? 'No confirmation from recipient'
+        : (ackResult.error || 'Recipient reported a failed transfer');
+      Metrics.increment('transfersFailed');
+      Logger.error('Transfer', `Not confirmed by ${transfer.peerId}: ${transfer.lastError}`);
+    }
     updateTransferUI(transfer);
 
   } catch (err) {
@@ -984,12 +1051,14 @@ async function handleFileComplete(fromPeerId, data) {
       Metrics.add('bytesTransferred', transfer.totalBytes);
       Logger.info('Receive', `Verified from ${fromPeerId}: ${transfer.file.name}`);
       downloadFile(blob, transfer.file.name);
+      sendTo(state.connections.get(fromPeerId), { type: 'transfer-ack', id: data.id });
     } else {
       transfer.status = 'failed';
       transfer.lastError = 'Hash mismatch - file corrupted';
       Metrics.increment('transfersFailed');
       Logger.error('Receive', `Hash mismatch from ${fromPeerId}: ${transfer.file.name}`);
       showError(`File corrupted during transfer: ${escapeHtml(transfer.file.name)}`);
+      sendTo(state.connections.get(fromPeerId), { type: 'transfer-nack', id: data.id, error: 'Hash mismatch - file corrupted' });
     }
 
     delete transfer.chunks;
@@ -1001,6 +1070,7 @@ async function handleFileComplete(fromPeerId, data) {
     transfer.lastError = err.message;
     Metrics.increment('transfersFailed');
     updateTransferUI(transfer);
+    sendTo(state.connections.get(fromPeerId), { type: 'transfer-nack', id: data.id, error: err.message });
   }
 }
 
@@ -1172,6 +1242,7 @@ function updateTransferUI(transfer) {
       pending: 'Waiting...',
       sending: 'Sending...',
       receiving: 'Receiving...',
+      verifying: 'Sent -- confirming with recipient...',
       paused: 'Paused',
       completed: '✓ Complete - Hash verified',
       cancelled: 'Cancelled',
